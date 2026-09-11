@@ -1,0 +1,257 @@
+# EX-01 – Deployment des Spring-Boot-Backends (mit MariaDB) auf AWS EC2 mit GitHub Actions
+
+## Lernziele
+
+Nach dieser Übung könnt ihr:
+
+- ein bestehendes lokales Git-Repository mit einem leeren GitHub-Repository verbinden und pushen
+- eine EC2-Instanz für das Hosting eines Spring-Boot-Backends samt MariaDB vorbereiten
+- eine GitHub-Actions-Pipeline mit den Jobs **test → build → deploy** nachvollziehen
+- die für den Deploy-Job nötigen **Secrets** und **Variables** in GitHub konfigurieren
+- einen Workflow-Run beobachten, Fehler lesen und gezielt beheben
+
+## Voraussetzungen
+
+- Ein GitHub-Account mit Zugriff (push-Recht) auf das Ziel-Repository
+- `git` und die GitHub CLI (`gh`) lokal installiert, `gh auth login` bereits ausgeführt
+- Eine laufende AWS-EC2-Instanz (Ubuntu-AMI) mit einer `.pem`-Datei zum SSH-Login
+- Security Group der Instanz erlaubt eingehenden Traffic auf Port 22 (SSH) und Port 8080 (die REST-API, Spring Boots Standardport)
+- Java 21 lokal installiert (`java -version`), um die Applikation vor dem Deploy lokal bauen/testen zu können
+
+---
+
+## Schritt 1: Lokales Repository mit GitHub verbinden
+
+Falls noch kein GitHub-Repository existiert, legt zuerst ein **leeres** privates Repository an (kein README, keine `.gitignore` — sonst gibt es beim ersten Push Konflikte).
+
+Prüft den aktuell konfigurierten Remote:
+
+```bash
+git remote -v
+```
+
+Zeigt er auf das falsche Repo oder verwendet er ein Protokoll, für das ihr keinen Zugriff habt (z. B. SSH ohne hinterlegten Key), setzt ihn neu:
+
+```bash
+git remote set-url origin https://github.com/<user>/<repo>.git
+```
+
+**Stolperstein „Repository not found“:** Diese Meldung erscheint sowohl bei falscher URL als auch bei fehlender Berechtigung. Prüft mit `gh auth status`, welcher GitHub-Account gerade aktiv ist — bei mehreren angemeldeten Accounts kann es sein, dass der falsche aktiv ist:
+
+```bash
+gh auth status
+gh auth switch --hostname github.com --user <dein-github-user>
+```
+
+Danach pushen und den Tracking-Branch setzen:
+
+```bash
+git push -u origin main
+```
+
+---
+
+## Schritt 2: Workflow-Datei verstehen
+
+Die Pipeline liegt in `.github/workflows/deploy.yml` und besteht aus drei Jobs:
+
+| Job | Zweck |
+| --- | --- |
+| `test` | `./mvnw test` (JUnit / Spring Boot Test, läuft gegen die eingebettete H2-Datenbank) |
+| `build` | `./mvnw clean package -DskipTests`, das Ergebnis aus `target/*.jar` wird als Artefakt hochgeladen |
+| `deploy` | lädt das Artefakt, überträgt die `.jar`-Datei per `rsync` über SSH auf die EC2-Instanz und startet den systemd-Service neu |
+
+Wichtige Details im `deploy`-Job:
+
+- `environment: production` — die Secrets für diesen Job werden aus dem GitHub-**Environment** `production` gelesen, nicht aus den allgemeinen Repo-Secrets
+- `if: github.ref == 'refs/heads/main' && ...` — der Deploy läuft nur bei einem Push auf `main`, nicht bei Pull Requests
+- Der Job schreibt den privaten SSH-Key temporär nach `~/.ssh/deploy_key`, überträgt die Datei via `rsync`, und entfernt den Key am Ende garantiert wieder (`if: always()`)
+
+Lest euch die Datei einmal komplett durch, bevor ihr weitermacht.
+
+> **Unterschied zu einem Frontend-Build:** Bei einer Vite-App würde der `build`-Job Umgebungsvariablen (z. B. eine API-Basis-URL) fest in das JS-Bundle einkompilieren. Spring Boot liest seine Konfiguration (Datenbank-URL, aktives Profil, …) dagegen erst **zur Laufzeit** — über `application*.properties`, Programmargumente oder Umgebungsvariablen. Der `build`-Job hier braucht deshalb keine einzige Repository-Variable; das jar ist zur Build-Zeit noch völlig umgebungsunabhängig.
+
+---
+
+## Schritt 3: EC2-Instanz vorbereiten
+
+Einmalig auf der Instanz ausführen (per SSH verbunden).
+
+### Java-Runtime installieren
+
+```bash
+sudo apt update
+sudo apt install -y openjdk-21-jre-headless rsync
+```
+
+### MariaDB installieren und einrichten
+
+An dieser Stelle wird MariaDB bewusst **nativ per `apt`** installiert, nicht über Docker — Docker ist erst Thema von [EX-02](./EX-02-create-Docker-Image-DockerHub.md). Datenbankname und Credentials werden dabei exakt so gewählt, wie sie schon in `docker/docker-compose.yml` für die lokale Entwicklung stehen, damit dasselbe Spring-Profil (`application-mariadb.properties`) unverändert auch hier funktioniert:
+
+```bash
+sudo apt install -y mariadb-server
+sudo systemctl enable --now mariadb
+
+sudo mysql -e "CREATE DATABASE IF NOT EXISTS db_biztrips;"
+sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'bbw123';"
+```
+
+> In einem echten Produktionssetup würde man hier einen eigenen, wenig privilegierten Datenbank-User anlegen statt `root` zu verwenden. Für diese Übung wird bewusst dieselbe (einfache) Konfiguration wie lokal verwendet, um den Fokus auf der Pipeline zu halten und nicht auf DB-Berechtigungskonzepten.
+
+### Verzeichnis und systemd-Service anlegen
+
+```bash
+sudo mkdir -p /opt/businesstrips
+sudo chown -R "$USER":"$USER" /opt/businesstrips
+```
+
+systemd-Unit unter `/etc/systemd/system/businesstrips.service` anlegen:
+
+```ini
+[Unit]
+Description=SpringBoot BusinessTrips Backend
+After=network.target mariadb.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/businesstrips
+ExecStart=/usr/bin/java -jar /opt/businesstrips/app.jar --spring.profiles.active=mariadb
+SuccessExitStatus=143
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Aktivieren (noch nicht starten — es liegt noch kein `app.jar` vor, das kommt erst beim ersten Deploy):
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable businesstrips.service
+```
+
+> Der Deploy-Job ruft `sudo` **ohne Passwort** auf (für `systemctl restart`). Das funktioniert bei den AWS-Standard-AMIs für `ubuntu` bereits ohne weiteres Zutun.
+
+---
+
+## Schritt 4: GitHub Environment anlegen
+
+Unter *Settings → Environments* im Repository ein Environment namens **`production`** anlegen (Name muss exakt mit `environment: production` in der Workflow-Datei übereinstimmen). Ohne dieses Environment schlägt der Deploy-Job sofort fehl.
+
+---
+
+## Schritt 5: Secrets konfigurieren
+
+Der Deploy-Job braucht drei **Secrets im Environment `production`** (*Settings → Environments → production → Add secret*, oder per CLI):
+
+| Secret | Beispiel | Beschreibung |
+| --- | --- | --- |
+| `EC2_HOST` | `ec2-3-93-182-80.compute-1.amazonaws.com` | Public DNS oder IP der Instanz |
+| `EC2_USER` | `ubuntu` | SSH-Benutzer (Ubuntu-AMI) |
+| `EC2_SSH_KEY` | Inhalt der `.pem`-Datei, vollständig inkl. `-----BEGIN...-----`/`-----END...-----` | Privater SSH-Key |
+
+### Per GitHub CLI setzen
+
+```bash
+gh secret set EC2_HOST --env production --body "ec2-3-93-182-80.compute-1.amazonaws.com"
+gh secret set EC2_USER --env production --body "ubuntu"
+gh secret set EC2_SSH_KEY --env production < /pfad/zu/deiner-datei.pem
+```
+
+> Für `EC2_SSH_KEY` bewusst mit `< datei.pem` (Datei als stdin) statt `--body "$(cat datei.pem)"` arbeiten — so landet der Key-Inhalt nie sichtbar im Terminal-Verlauf oder in der Shell-History.
+
+Im Unterschied zu einem Frontend-Beispiel braucht der `build`-Job hier **keine** Repository-Variables (siehe Kasten in Schritt 2) — es müssen also keine zusätzlichen `gh variable set`-Aufrufe gemacht werden.
+
+---
+
+## Schritt 6: Push auslösen und Workflow beobachten
+
+```bash
+git push
+gh run list --limit 5
+gh run view <run-id>
+```
+
+Läuft ein Job rot, zeigt euch die genaue Fehlermeldung:
+
+```bash
+gh run view <run-id> --log-failed
+```
+
+### Bekannte Stolpersteine
+
+**„refusing to allow an OAuth App to create or update workflow `.github/workflows/deploy.yml` without `workflow` scope“**
+Der `gh`-Token hat keine Berechtigung, Workflow-Dateien zu pushen. Token-Scope nachträglich erweitern:
+
+```bash
+gh auth refresh -h github.com -s workflow
+```
+
+Es folgt ein Device-Login-Flow: Code kopieren, `https://github.com/login/device` öffnen, Code eingeben, mit dem richtigen Account bestätigen. Danach `gh auth setup-git` erneut ausführen und pushen.
+
+**Deploy-Job scheitert im Schritt „SSH-Key einrichten“ mit `Process completed with exit code 1`**
+Das bedeutet fast immer: eines der drei Secrets (`EC2_HOST`, `EC2_USER`, `EC2_SSH_KEY`) ist leer oder fehlt im Environment `production`. Prüft mit:
+
+```bash
+gh secret list --env production
+```
+
+und ergänzt die fehlenden Werte wie in Schritt 5 beschrieben.
+
+**App startet auf der EC2-Instanz nicht, `systemctl status businesstrips.service` zeigt einen Datenbankfehler**
+Meist ist MariaDB (noch) nicht gestartet oder das `ALTER USER`-Passwort aus Schritt 3 stimmt nicht mit `application-mariadb.properties` überein. Prüfen mit:
+
+```bash
+sudo systemctl status mariadb
+sudo journalctl -u businesstrips.service -n 50 --no-pager
+```
+
+**Workflow läuft nicht neu, obwohl Secrets jetzt korrekt sind**
+Ihr müsst nicht zwingend einen neuen Commit pushen — ein fehlgeschlagener Run lässt sich gezielt wiederholen:
+
+```bash
+gh run rerun <run-id> --failed
+```
+
+---
+
+## Schritt 7: Ergebnis prüfen
+
+Nach einem grünen Run sollte die API unter `http://<EC2_HOST>:8080` erreichbar sein:
+
+```bash
+curl -i http://ec2-3-93-182-80.compute-1.amazonaws.com:8080/v1/trips
+```
+
+Erwartet wird ein `HTTP/1.1 200 OK` mit einem JSON-Array der (beim Start automatisch eingefügten) Demo-Trips — das bestätigt gleichzeitig, dass die Applikation läuft **und** erfolgreich mit MariaDB verbunden ist.
+
+---
+
+## Reflexionsfragen
+
+1. Warum liegen `EC2_HOST`, `EC2_USER` und `EC2_SSH_KEY` im Environment `production` und nicht als normale Repository-Secrets?
+2. Warum braucht der `build`-Job hier keine einzige Repository-Variable, obwohl ein vergleichbarer Frontend-Build (z. B. mit Vite) üblicherweise mindestens eine API-Basis-URL als Build-Variable bräuchte?
+3. Was würde passieren, wenn der `deploy`-Job auch bei Pull Requests laufen würde? Warum schützt die Bedingung `if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'` davor?
+4. Warum wird der SSH-Key am Ende des Jobs mit `if: always()` wieder gelöscht, statt nur am erfolgreichen Ende?
+
+---
+
+## Musterlösung zu den Reflexionsfragen
+
+> Erst selbst versuchen, dann vergleichen.
+
+**1. Warum liegen `EC2_HOST`, `EC2_USER` und `EC2_SSH_KEY` im Environment `production` und nicht als normale Repository-Secrets?**
+
+Environment-Secrets sind an das Environment gebunden und werden nur Jobs zur Verfügung gestellt, die explizit `environment: production` deklarieren. So kann man zusätzliche Schutzregeln (z. B. Required Reviewers, Wartezeiten, Branch-Einschränkungen) direkt am Environment festmachen, bevor sensible Deploy-Credentials überhaupt gelesen werden dürfen. Bei normalen Repo-Secrets hätte theoretisch jeder Job im Repo (auch versehentlich in einem PR-Workflow) Zugriff darauf.
+
+**2. Warum braucht der `build`-Job hier keine einzige Repository-Variable, obwohl ein vergleichbarer Frontend-Build üblicherweise mindestens eine API-Basis-URL bräuchte?**
+
+Ein Vite-Build kompiliert Umgebungsvariablen zur **Build-Zeit** fest in das erzeugte JS-Bundle ein — danach lassen sie sich nicht mehr ändern, ohne neu zu bauen. Ein Spring-Boot-`.jar` ist dagegen zur Build-Zeit komplett konfigurationsunabhängig: Datenbank-URL, aktives Profil usw. werden erst beim **Start** der Applikation (hier über `--spring.profiles.active=mariadb` in der systemd-Unit) aus `application*.properties`, Programmargumenten oder Umgebungsvariablen gelesen. Genau dasselbe `.jar` könnte unverändert auch mit einem anderen Profil oder einer anderen Datenbank gestartet werden.
+
+**3. Was würde passieren, wenn der `deploy`-Job auch bei Pull Requests laufen würde? Warum schützt die Bedingung davor?**
+
+Ohne diese Bedingung würde jeder PR — auch von einem Fork oder mit noch ungeprüftem Code — potenziell einen Deploy auf die Produktions-EC2-Instanz auslösen, inklusive Zugriff auf den privaten SSH-Key. Das wäre sowohl ein Sicherheitsrisiko (fremder Code bekäme faktisch Zugriff auf Produktionscredentials) als auch fachlich falsch, da PR-Branches oft nicht "production-ready" sind. Die Bedingung `github.ref == 'refs/heads/main' && github.event_name != 'pull_request'` stellt sicher, dass nur tatsächliche Pushes auf `main` deployen.
+
+**4. Warum wird der SSH-Key am Ende des Jobs mit `if: always()` wieder gelöscht, statt nur am erfolgreichen Ende?**
+
+Der Key liegt während des Jobs unverschlüsselt auf dem Runner-Dateisystem. Schlägt ein vorheriger Schritt fehl (z. B. `rsync` bricht ab), würde der restliche Job normalerweise übersprungen — ohne `if: always()` bliebe der Key dann auf dem (kurzlebigen, aber trotzdem fremden) GitHub-Runner zurück, statt garantiert entfernt zu werden. `always()` sorgt dafür, dass der Aufräumschritt unabhängig vom Erfolg vorheriger Schritte ausgeführt wird.
