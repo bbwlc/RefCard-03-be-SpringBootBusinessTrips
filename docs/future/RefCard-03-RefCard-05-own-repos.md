@@ -8,8 +8,8 @@
 
 | RefCard | Neues Thema | Frontend | Backend | Datenbank | Storage |
 | --- | --- | --- | --- | --- | --- |
-| 02 (dieses Repo) | GitHub Actions, EC2, Docker, ECS | React + Vite | – | – | – |
-| 03 | Spring Boot Backend | React + Vite | Spring Boot | MariaDB | – |
+| 02 | GitHub Actions, EC2, Docker, ECS | React + Vite | – | – | – |
+| 🟢 **03 (dieses Repo)** | Spring Boot Backend | React + Vite | Spring Boot | MariaDB | – |
 | 04 | Storage (Bilder) | React + Vite | Spring Boot | MariaDB | lokal/Volume → Vorstufe zu S3 |
 | 05 | Fullstack auf AWS | React + Vite | Spring Boot | MariaDB | S3 |
 
