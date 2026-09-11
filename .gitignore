@@ -34,3 +34,6 @@ build/
 
 ### macOS ###
 .DS_Store
+
+### Docker Compose local MariaDB data (regenerated on `docker compose up`) ###
+docker/database/
