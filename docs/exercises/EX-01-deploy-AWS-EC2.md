@@ -15,7 +15,9 @@ Nach dieser Übung könnt ihr:
 - Ein GitHub-Account mit Zugriff (push-Recht) auf das Ziel-Repository
 - `git` und die GitHub CLI (`gh`) lokal installiert, `gh auth login` bereits ausgeführt
 - Eine laufende AWS-EC2-Instanz mit einer `.pem`-Datei zum SSH-Login — Ubuntu-AMI oder Amazon-Linux-AMI (z. B. der Default in AWS Academy Learner Lab, dort meist als `labsuser.pem` benannt); Schritt 3 zeigt beide Varianten
-- Security Group der Instanz erlaubt eingehenden Traffic auf Port 22 (SSH) und Port 8080 (die REST-API, Spring Boots Standardport)
+- Security Group der Instanz erlaubt eingehenden Traffic auf Port 22 (SSH) und Port 8080 (die REST-API, Spring Boots Standardport) — **am einfachsten schon beim Erstellen der Instanz mitgeben:**
+  Im EC2-Launch-Wizard unter *Network settings* ist standardmässig nur eine Regel für SSH (Port 22) vorausgewählt. Dort auf **Add security group rule** klicken und eine zweite Regel ergänzen: Type `Custom TCP`, Port range `8080`, Source `Anywhere` (`0.0.0.0/0`). Ohne diese Regel läuft die Applikation zwar einwandfrei, ist aber von aussen nicht erreichbar — `curl`/Browser hängen dann in einem Timeout, nicht in einer sofortigen Fehlermeldung (das ist das typische Symptom eines fehlenden Security-Group-Eintrags, siehe Stolpersteine in Schritt 6).
+  Existiert die Instanz schon ohne diese Regel: *EC2 → Instances → Instance auswählen → Tab „Security" → Security-Group-Link anklicken → Inbound rules → Edit inbound rules → Add rule* (gleiche Werte wie oben). Hat die Instanz mehrere Security Groups (in AWS Academy Learner Lab häufig, da jede gestartete Instanz eine eigene `launch-wizard-N`-Gruppe bekommt), die Regel bei **allen** an der Instanz hängenden Gruppen ergänzen — es reicht, wenn eine davon den Traffic erlaubt, aber ohne die Instanz-Security-Tab-Ansicht zu prüfen weiss man nicht, welche das ist.
 - Java 21 lokal installiert (`java -version`), um die Applikation vor dem Deploy lokal bauen/testen zu können
 
 ---
@@ -260,6 +262,15 @@ Ihr müsst nicht zwingend einen neuen Commit pushen — ein fehlgeschlagener Run
 ```bash
 gh run rerun <run-id> --failed
 ```
+
+**Workflow ist grün, `systemctl status businesstrips.service` zeigt `active (running)`, aber `curl http://<EC2_HOST>:8080/...` hängt und liefert nach einiger Zeit einen Timeout (kein `Connection refused`)**
+Fast immer eine fehlende Security-Group-Regel für Port 8080 — siehe Voraussetzungen weiter oben. Ein **Timeout** (statt einer sofortigen Fehlermeldung wie `Connection refused`) ist dabei das typische Symptom: Die Pakete werden von der Security Group stumm verworfen, bevor sie überhaupt die Instanz erreichen, die Applikation selbst bekommt davon nichts mit. Zur Kontrolle von aussen (ohne SSH), ob der Port erreichbar ist:
+
+```bash
+nc -zv <EC2_HOST> 8080
+```
+
+`succeeded` heisst: Port offen, Problem liegt woanders. `Operation timed out` bestätigt die fehlende Security-Group-Regel.
 
 ---
 
