@@ -265,13 +265,19 @@ gh run rerun <run-id> --failed
 
 ## Schritt 7: Ergebnis prüfen
 
-Nach einem grünen Run sollte die API unter `http://<EC2_HOST>:8080` erreichbar sein:
+Nach einem grünen Run sollte die API unter `http://<EC2_HOST>:8080` erreichbar sein. Am schnellsten mit dem Actuator-Health-Endpoint prüfen, ob Applikation und Datenbank laufen:
+
+```bash
+curl -i http://ec2-3-93-182-80.compute-1.amazonaws.com:8080/actuator/health
+```
+
+Erwartet wird `HTTP/1.1 200 OK` mit `{"status":"UP",...}`. Alternativ (oder zusätzlich) direkt die fachliche API prüfen:
 
 ```bash
 curl -i http://ec2-3-93-182-80.compute-1.amazonaws.com:8080/v1/trips
 ```
 
-Erwartet wird ein `HTTP/1.1 200 OK` mit einem JSON-Array der (beim Start automatisch eingefügten) Demo-Trips — das bestätigt gleichzeitig, dass die Applikation läuft **und** erfolgreich mit MariaDB verbunden ist.
+Erwartet wird ein `HTTP/1.1 200 OK` mit einem JSON-Array der (beim Start automatisch eingefügten) Demo-Trips — das bestätigt zusätzlich, dass die REST-API selbst funktioniert, nicht nur die Basis-Infrastruktur.
 
 ---
 

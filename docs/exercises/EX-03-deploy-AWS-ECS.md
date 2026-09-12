@@ -163,12 +163,12 @@ Ein Fargate-Cluster braucht keine eigenen EC2-Instanzen — der Cluster ist zun�
 
 ## Schritt 5: Application Load Balancer + Target Group
 
-- Eine **Target Group** vom Typ `ip` (Fargate-Tasks bekommen eine ENI mit eigener IP, keine Instance-ID) anlegen, Port **8080** (Spring Boots Standardport), Health-Check-Pfad `/v1/trips`
+- Eine **Target Group** vom Typ `ip` (Fargate-Tasks bekommen eine ENI mit eigener IP, keine Instance-ID) anlegen, Port **8080** (Spring Boots Standardport), Health-Check-Pfad `/actuator/health`
 - Einen **Application Load Balancer** in mindestens zwei Subnets anlegen, Listener auf Port 80 → leitet an die Target Group weiter
 - Security Group des ALB: eingehend Port 80 aus dem Internet
 - Security Group der Fargate-Tasks (`sg-tasks`): eingehend Port 8080 **nur von der Security Group des ALB**; ausgehend Port 3306 zur Security Group der RDS-Instanz aus Schritt 3
 
-> Der Health-Check-Pfad `/v1/trips` ist ein pragmatischer Kompromiss: Er liefert `200 OK`, solange mindestens ein Trip in der Datenbank existiert (was durch die Demo-Seed-Daten immer der Fall ist), beweist damit App **und** DB-Verbindung. In einer echten Produktions-Applikation würde man dafür stattdessen einen dedizierten `/actuator/health`-Endpoint (Spring Boot Actuator) einrichten, der bewusst keine Fachlogik/Datenbankinhalte voraussetzt — das ist in diesem Projekt (noch) nicht eingerichtet.
+> `/actuator/health` (Spring Boot Actuator) liefert `200 OK` mit `{"status":"UP",...}`, sobald die Applikation läuft **und** die Datenbankverbindung steht — Actuator bringt dafür automatisch einen `db`-Health-Indicator mit, der eine einfache `isValid()`-Prüfung gegen die konfigurierte Datenbank macht, ganz ohne Fachlogik/Business-Daten vorauszusetzen. Das ist der Grund, warum dieser Pfad (statt z. B. `/v1/trips`) der richtige Health-Check-Pfad für die Target Group ist.
 
 ---
 
