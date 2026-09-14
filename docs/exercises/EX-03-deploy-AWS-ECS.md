@@ -372,3 +372,23 @@ Häufig fehlende `assignPublicIp=ENABLED` bei Tasks in einem öffentlichen Subne
 4. Warum steht `SPRING_DATASOURCE_PASSWORD` in der Task Definition unter `secrets` (Secrets Manager), während `SPRING_DATASOURCE_URL` einfach unter `environment` im Klartext steht?
 5. Was passiert mit den zwei laufenden Tasks eines Services, wenn ein `update-service` mit neuer Task-Definition ausgelöst wird — und warum ist das ein Vorteil gegenüber dem Single-Server-Deployment aus EX-01?
 6. Warum braucht die Target Group in Schritt 5 den Typ `ip` statt `instance`, obwohl EX-01/EX-02 nie mit Target Groups gearbeitet haben?
+
+---
+
+## Kurzübersicht: Was für dieses ECS-Setup insgesamt nötig ist
+
+**Anzulegende AWS-Ressourcen (Schritte 1–5):**
+1. **ECR-Repository** – `aws ecr create-repository --repository-name biztrips-backend`
+2. **IAM-OIDC-Provider + Rolle** für GitHub Actions – Trust Policy eingeschränkt auf `repo:<user>/<repo>:ref:refs/heads/main`, mit `AmazonEC2ContainerRegistryPowerUser` + eingeschränkter ECS-Update-Policy. *(Nur auf einem regulären AWS-Account möglich – siehe Exkurs zu AWS Academy Learner Lab.)*
+3. **RDS-MariaDB-Instanz** (`db.t3.micro`, nicht öffentlich erreichbar, Security Group erlaubt Port 3306 nur von der Security Group der Fargate-Tasks) + Passwort in **Secrets Manager**
+4. **ECS-Cluster** (Fargate – keine eigenen EC2-Instanzen zu verwalten)
+5. **Application Load Balancer + Target Group** (Typ `ip`, Port 8080, Health-Check-Pfad `/actuator/health`) + zwei Security Groups (ALB: eingehend Port 80 aus dem Internet; Tasks: eingehend Port 8080 nur von der SG des ALB, ausgehend Port 3306 zur SG von RDS)
+
+**Dateien/Konfiguration (Schritte 6–8):**
+- `task-definition.json` im Projektroot – Fargate-Task-Definition mit Referenz auf das ECR-Image, `executionRoleArn` (braucht `AmazonECSTaskExecutionRolePolicy` + `secretsmanager:GetSecretValue` auf das DB-Passwort-Secret), DB-URL/-Username im Klartext als `environment`, DB-Passwort über `secrets` aus Secrets Manager
+- Job `deploy-ecs` in `deploy.yml` – **bereits vorhanden** in diesem Repo, `needs: docker`, bezieht Zugangsdaten per OIDC über `aws-actions/configure-aws-credentials@v4`
+- Eine Repository-/Environment-Variable: **`AWS_ROLE_ARN`** – die IAM-Rollen-ARN aus Schritt 2
+
+**Wichtiger dokumentierter Fallback:** Bei einem **AWS Academy Learner Lab**-Account (statt einem regulären AWS-Account) schlägt Schritt 2 (`iam:CreateOpenIDConnectProvider`) mit `AccessDenied` fehl – Learner Lab erlaubt das Anlegen eigener IAM-Rollen/OIDC-Provider nicht. Der im Exkurs dokumentierte Fallback verwendet stattdessen die temporären Session-Zugangsdaten des Labs (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`, zu finden unter *AWS Details → AWS CLI* im Lab) als normale GitHub-Secrets, mit einer entsprechend angepassten Variante des `configure-aws-credentials`-Schritts. Einschränkung: Diese Zugangsdaten laufen ab, sobald die Lab-Sitzung endet/neu startet, und müssen dann manuell aktualisiert werden – RDS selbst ist von dieser Einschränkung nicht betroffen.
+
+**Offene Frage vor dem Start:** Handelt es sich um einen regulären AWS-Account oder einen Learner-Lab-Account? Das entscheidet, ob Schritt 2 wie beschrieben durchgeführt wird oder der Fallback greift.
