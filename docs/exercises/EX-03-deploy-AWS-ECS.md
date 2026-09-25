@@ -125,7 +125,7 @@ aws rds create-db-instance \
   --master-user-password '<sicheres-passwort>' \
   --allocated-storage 20 \
   --db-name db_biztrips \
-  --publicly-accessible false
+  --no-publicly-accessible
 ```
 
 Fertigstellung abwarten (dauert einige Minuten) und den Endpoint notieren:

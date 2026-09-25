@@ -82,7 +82,7 @@ dokumentiert; Hintergründe/Warum stehen im Haupt-Dokument.
     --master-user-password '<sicheres-passwort>' \
     --allocated-storage 20 \
     --db-name db_biztrips \
-    --publicly-accessible false \
+    --no-publicly-accessible \
     --region us-east-1
   ```
 - [ ] Warten, bis verfügbar (dauert einige Minuten):
@@ -117,11 +117,18 @@ dokumentiert; Hintergründe/Warum stehen im Haupt-Dokument.
 
 ## 5. Netzwerk: Security Groups, Application Load Balancer, Target Group
 
-- [ ] VPC- und Subnet-IDs ermitteln (Learner Lab hat meist eine Default-VPC):
+- [ ] VPC- und Subnet-IDs ermitteln (Learner Lab hat bereits eine Default-VPC, nichts manuell anzulegen):
   ```bash
-  aws ec2 describe-vpcs --query "Vpcs[0].VpcId" --output text --region us-east-1
-  aws ec2 describe-subnets --filters "Name=vpc-id,Values=<vpc-id>" --query "Subnets[].SubnetId" --output text --region us-east-1
+  VPC_ID=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" \
+    --query "Vpcs[0].VpcId" --output text --region us-east-1)
+  echo $VPC_ID
+
+  SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" \
+    --query "Subnets[].SubnetId" --output text --region us-east-1)
+  echo $SUBNET_IDS
   ```
+  `$SUBNET_IDS` listet mehrere Subnet-IDs (eine pro Availability Zone) —
+  daraus zwei für `<subnet-a>`/`<subnet-b>` unten auswählen.
 - [ ] Security Group `sg-alb` anlegen: eingehend Port **80** aus dem Internet (`0.0.0.0/0`)
 - [ ] Security Group `sg-tasks` anlegen: eingehend Port **8080** nur von `sg-alb`; ausgehend Port **3306** zur Security Group der RDS-Instanz
 - [ ] Target Group anlegen: Typ `ip`, Port **8080**, Health-Check-Pfad `/actuator/health`
