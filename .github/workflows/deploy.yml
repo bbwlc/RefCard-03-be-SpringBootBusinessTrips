@@ -46,43 +46,43 @@ jobs:
           name: app-jar
           path: target/*.jar
 
-  deploy:
-    name: Auf EC2 deployen
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    environment: production
-    steps:
-      - name: Jar-Artefakt herunterladen
-        uses: actions/download-artifact@v4
-        with:
-          name: app-jar
-          path: target
-
-      - name: SSH-Key einrichten
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
-
-      - name: Jar auf EC2 übertragen
-        run: |
-          JAR_FILE=$(ls target/*.jar)
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" "$JAR_FILE" "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/opt/businesstrips/app.jar"
-
-      - name: Service neu starten
-        run: |
-          ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" "sudo systemctl restart businesstrips.service"
-
-      - name: SSH-Key entfernen
-        if: always()
-        run: rm -f ~/.ssh/deploy_key
-
+#  deploy:
+#    name: Auf EC2 deployen
+#    runs-on: ubuntu-latest
+#    needs: build
+#    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+#    environment: production
+#    steps:
+#      - name: Jar-Artefakt herunterladen
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: app-jar
+#          path: target
+#
+#      - name: SSH-Key einrichten
+#        run: |
+#          mkdir -p ~/.ssh
+#          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+#          chmod 600 ~/.ssh/deploy_key
+#          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+#
+#      - name: Jar auf EC2 übertragen
+#        run: |
+#          JAR_FILE=$(ls target/*.jar)
+#          rsync -avz -e "ssh -i ~/.ssh/deploy_key" "$JAR_FILE" "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/opt/businesstrips/app.jar"
+#
+#      - name: Service neu starten
+#        run: |
+#          ssh -i ~/.ssh/deploy_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" "sudo systemctl restart businesstrips.service"
+#
+#      - name: SSH-Key entfernen
+#        if: always()
+#        run: rm -f ~/.ssh/deploy_key
+#
   docker:
     name: Docker-Image bauen und auf Docker Hub veröffentlichen
     runs-on: ubuntu-latest
-    needs: deploy
+#    needs: deploy
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -111,16 +111,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: docker
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    permissions:
-      id-token: write   # notwendig für OIDC
-      contents: read
     steps:
       - uses: actions/checkout@v4
 
-      - name: AWS-Credentials via OIDC beziehen
+      - name: AWS-Credentials einrichten (AWS Academy Learner Lab)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: eu-central-1
 
       - name: Bei ECR anmelden
