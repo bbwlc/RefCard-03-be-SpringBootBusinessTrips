@@ -130,29 +130,73 @@ dokumentiert; Hintergründe/Warum stehen im Haupt-Dokument.
   `$SUBNET_IDS` listet mehrere Subnet-IDs (eine pro Availability Zone) —
   daraus zwei für `<subnet-a>`/`<subnet-b>` unten auswählen.
 - [ ] Security Group `sg-alb` anlegen: eingehend Port **80** aus dem Internet (`0.0.0.0/0`)
-- [ ] Security Group `sg-tasks` anlegen: eingehend Port **8080** nur von `sg-alb`; ausgehend Port **3306** zur Security Group der RDS-Instanz
-- [ ] Target Group anlegen: Typ `ip`, Port **8080**, Health-Check-Pfad `/actuator/health`
   ```bash
-  aws elbv2 create-target-group \
-    --name biztrips-backend-tg --protocol HTTP --port 8080 \
-    --vpc-id <vpc-id> --target-type ip \
-    --health-check-path /actuator/health \
+  SG_ALB_ID=$(aws ec2 create-security-group \
+    --group-name biztrips-backend-alb-sg \
+    --description "ALB ingress from internet" \
+    --vpc-id $VPC_ID \
+    --query GroupId --output text --region us-east-1)
+  echo $SG_ALB_ID
+
+  aws ec2 authorize-security-group-ingress \
+    --group-id $SG_ALB_ID \
+    --protocol tcp --port 80 --cidr 0.0.0.0/0 \
     --region us-east-1
   ```
-- [ ] Application Load Balancer anlegen (mind. zwei Subnets, verschiedene AZs):
+- [ ] Security Group `sg-tasks` anlegen: eingehend Port **8080** nur von `sg-alb`
   ```bash
-  aws elbv2 create-load-balancer \
+  SG_TASKS_ID=$(aws ec2 create-security-group \
+    --group-name biztrips-backend-tasks-sg \
+    --description "Fargate tasks ingress from ALB" \
+    --vpc-id $VPC_ID \
+    --query GroupId --output text --region us-east-1)
+  echo $SG_TASKS_ID
+
+  aws ec2 authorize-security-group-ingress \
+    --group-id $SG_TASKS_ID \
+    --protocol tcp --port 8080 \
+    --source-group $SG_ALB_ID \
+    --region us-east-1
+  ```
+- [ ] RDS-Security-Group um eingehenden Port **3306** von `sg-tasks` erweitern (ergänzt Schritt 3):
+  ```bash
+  RDS_SG_ID=$(aws rds describe-db-instances \
+    --db-instance-identifier biztrips-backend-db \
+    --query "DBInstances[0].VpcSecurityGroups[0].VpcSecurityGroupId" \
+    --output text --region us-east-1)
+
+  aws ec2 authorize-security-group-ingress \
+    --group-id $RDS_SG_ID \
+    --protocol tcp --port 3306 \
+    --source-group $SG_TASKS_ID \
+    --region us-east-1
+  ```
+- [ ] Target Group anlegen: Typ `ip`, Port **8080**, Health-Check-Pfad `/actuator/health`
+  ```bash
+  TARGET_GROUP_ARN=$(aws elbv2 create-target-group \
+    --name biztrips-backend-tg --protocol HTTP --port 8080 \
+    --vpc-id $VPC_ID --target-type ip \
+    --health-check-path /actuator/health \
+    --query "TargetGroups[0].TargetGroupArn" --output text \
+    --region us-east-1)
+  echo $TARGET_GROUP_ARN
+  ```
+- [ ] Application Load Balancer anlegen (aus `$SUBNET_IDS` zwei IDs in verschiedenen AZs auswählen und unten für `<subnet-a>`/`<subnet-b>` einsetzen):
+  ```bash
+  ALB_ARN=$(aws elbv2 create-load-balancer \
     --name biztrips-backend-alb \
     --subnets <subnet-a> <subnet-b> \
-    --security-groups <sg-alb-id> \
-    --region us-east-1
+    --security-groups $SG_ALB_ID \
+    --query "LoadBalancers[0].LoadBalancerArn" --output text \
+    --region us-east-1)
+  echo $ALB_ARN
   ```
 - [ ] Listener auf Port 80 → Target Group anlegen:
   ```bash
   aws elbv2 create-listener \
-    --load-balancer-arn <alb-arn> \
+    --load-balancer-arn $ALB_ARN \
     --protocol HTTP --port 80 \
-    --default-actions Type=forward,TargetGroupArn=<target-group-arn> \
+    --default-actions Type=forward,TargetGroupArn=$TARGET_GROUP_ARN \
     --region us-east-1
   ```
 
@@ -179,7 +223,7 @@ dokumentiert; Hintergründe/Warum stehen im Haupt-Dokument.
 
 ## 7. ECS-Service anlegen
 
-- [ ] Service erstellen (Platzhalter `<subnet-...>`, `<sg-tasks-id>`, `<target-group-arn>` einsetzen):
+- [ ] Service erstellen (`<subnet-a>`/`<subnet-b>` weiterhin aus `$SUBNET_IDS`, restliche Werte aus den oben gesetzten Variablen):
   ```bash
   aws ecs create-service \
     --cluster biztrips-backend-cluster \
@@ -187,8 +231,8 @@ dokumentiert; Hintergründe/Warum stehen im Haupt-Dokument.
     --task-definition biztrips-backend \
     --desired-count 2 \
     --launch-type FARGATE \
-    --network-configuration "awsvpcConfiguration={subnets=[<subnet-a>,<subnet-b>],securityGroups=[<sg-tasks-id>],assignPublicIp=ENABLED}" \
-    --load-balancers "targetGroupArn=<target-group-arn>,containerName=biztrips-backend,containerPort=8080" \
+    --network-configuration "awsvpcConfiguration={subnets=[<subnet-a>,<subnet-b>],securityGroups=[$SG_TASKS_ID],assignPublicIp=ENABLED}" \
+    --load-balancers "targetGroupArn=$TARGET_GROUP_ARN,containerName=biztrips-backend,containerPort=8080" \
     --region us-east-1
   ```
 - [ ] Status prüfen, bis `runningCount == desiredCount`:
