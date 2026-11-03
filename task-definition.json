@@ -4,29 +4,29 @@
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "512",
   "memory": "1024",
-  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::211125356770:role/LabRole",
   "containerDefinitions": [
     {
       "name": "biztrips-backend",
-      "image": "123456789012.dkr.ecr.eu-central-1.amazonaws.com/biztrips-backend:latest",
+      "image": "211125356770.dkr.ecr.us-east-1.amazonaws.com/biztrips-backend:latest",
       "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
       "essential": true,
       "environment": [
         { "name": "SPRING_PROFILES_ACTIVE", "value": "mariadb" },
-        { "name": "SPRING_DATASOURCE_URL", "value": "jdbc:mariadb://<rds-endpoint>:3306/db_biztrips" },
+        { "name": "SPRING_DATASOURCE_URL", "value": "jdbc:mariadb://biztrips-backend-db.ctgyqyg6io6a.us-east-1.rds.amazonaws.com:3306/db_biztrips" },
         { "name": "SPRING_DATASOURCE_USERNAME", "value": "admin" }
       ],
       "secrets": [
         {
           "name": "SPRING_DATASOURCE_PASSWORD",
-          "valueFrom": "arn:aws:secretsmanager:eu-central-1:123456789012:secret:biztrips-backend-db-password"
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:211125356770:secret:biztrips-backend-db-password"
         }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
           "awslogs-group": "/ecs/biztrips-backend",
-          "awslogs-region": "eu-central-1",
+          "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "ecs"
         }
       }
